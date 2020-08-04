@@ -1,0 +1,49 @@
+---
+cluster_name: dev
+gcp_credentials_dir: ~/ansible-tmp/
+gcp_credentials_file: credentials-ansible
+ns_prefix: "{{ cluster_name }}"
+kubectl_command: kubectl
+
+# Project vars
+project_name: "gke-day-two"
+region: "us-central1"
+
+# 2048 game vars
+game_namespace: "{{ns_prefix}}-game"
+game_cert_secret_name: "game-biz-tls"
+
+#NOTE: REMOVE THIS IF MAKING REPO PUBLIC
+dns_owner_email: mrbrycefrazier@gmail.com
+
+# ExternalDNS vars
+external_dns_namespace: "external-dns"
+domain_name: "devcs.biz"
+managed_zone_name: "devcs-biz"
+external_dns_sa_account: "k8s-{{ cluster_name }}-external-dns"
+
+#TODO: add automation to delete managed zone
+
+standard_storage_class: "standard"
+mysql_ns: "test-mysql"
+
+velero_sa: "{{ cluster_name }}-velero"
+velero_sa_display_name: "{{ cluster_name }}-Velero Service Account"
+velero_bucket: "{{ cluster_name }}-velero-backups01"
+velero_role: "{{ cluster_name }}.velero.service.role"
+velero_role_title: "{{ cluster_name }}-Velero Server Role"
+velero_credentials_file: "credentials-velero"
+
+# Cert-Manager vars
+staging_or_production_certs: "production" # "staging" or "production"
+cert_manager_namespace: "cert-manager"
+cert_manager_release_name: "cert-manager"
+cert_manager_sa_secret_name: "cert-manager-credentials"
+cert_manager_sa_key_file_name: "gcp-dns-admin.json"
+cert_manager_sa_account: "k8s-{{ cluster_name }}-cert-manager"
+
+# Helm global vars
+helm_version: "v3.0.2"
+helm_path: /tmp/helm-{{ helm_version }}
+helm_platform_binary: "linux-amd64"
+helm_command: "{{ helm_path }}/{{helm_platform_binary}}/helm"

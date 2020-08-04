@@ -1,0 +1,87 @@
+---
+
+# TODO: refactor example-cluster in get-creds
+- name: ensure creds
+  shell: gcloud container clusters get-credentials example-cluster --region {{ region }} --project {{ project_name }}
+
+- name: create resource yaml files
+  template:
+    src: "{{ item }}.yaml.j2"
+    dest: "/tmp/{{ item }}.yaml"
+  with_items:
+    #- "2048-certificate"
+    #- "2048-issuer"
+    - "2048-service"
+    - "2048-deployment"
+    #- "2048-ingress"
+    # - "2048-managed-certificates"
+      
+- name: apply files
+  shell: |
+    {{ kubectl_command }} \
+    apply -R  -f /tmp/{{ item }}.yaml
+  register: install_results
+  until: install_results is success
+  retries: 5
+  delay: 3
+  with_items:
+    #- "2048-certificate"
+    #- "2048-issuer"
+    - "2048-service"
+    - "2048-deployment"
+    #- "2048-ingress"
+    # - "2048-managed-certificates"
+
+# staging letsencrypt certs
+- block:      
+  - name: create resource yaml files for staging certs
+    template:
+      src: "{{ item }}.yaml.j2"
+      dest: "/tmp/{{ item }}.yaml"
+    with_items:
+      - "2048-certificate-stage"
+      - "2048-issuer-stage"
+      - "2048-ingress-stage"
+      #- "2048-managed-certificates"
+
+  - name: apply files for staging certs
+    shell: |
+      {{ kubectl_command }} \
+      apply -R  -f /tmp/{{ item }}.yaml
+    register: install_results
+    until: install_results is success
+    retries: 5
+    delay: 3
+    with_items:
+      - "2048-certificate-stage"
+      - "2048-issuer-stage"
+      - "2048-ingress-stage"
+      # - "2048-managed-certificates"
+  when: staging_or_production_certs == "staging"
+
+# production letsencrypt certs
+- block:      
+  - name: create resource yaml files for production certs
+    template:
+      src: "{{ item }}.yaml.j2"
+      dest: "/tmp/{{ item }}.yaml"
+    with_items:
+      - "2048-certificate-prod"
+      - "2048-issuer-prod"
+      - "2048-ingress-prod"
+      #- "2048-managed-certificates"
+
+  - name: apply files for production certs
+    shell: |
+      {{ kubectl_command }} \
+      apply -R  -f /tmp/{{ item }}.yaml
+    register: install_results
+    until: install_results is success
+    retries: 5
+    delay: 3
+    with_items:
+      - "2048-certificate-prod"
+      - "2048-issuer-prod"
+      - "2048-ingress-prod"
+      # - "2048-managed-certificates"
+  when: staging_or_production_certs == "production"

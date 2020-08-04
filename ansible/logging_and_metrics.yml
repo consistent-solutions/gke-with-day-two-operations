@@ -1,0 +1,6 @@
+---
+
+- name:  "Logging and metrics role"
+  hosts: localhost
+  roles:
+    - logging_and_metrics

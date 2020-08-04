@@ -1,0 +1,6 @@
+---
+
+- name:  "Configure cluster RBAC"
+  hosts: localhost
+  roles:
+    - cluster_rbac

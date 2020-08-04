@@ -1,0 +1,12 @@
+apiVersion: cert-manager.io/v1alpha2
+kind: Certificate
+metadata:
+  name: game-biz-production
+  namespace: "{{ game_namespace }}"
+spec:
+  secretName: {{ game_cert_secret_name }}-production
+  issuerRef:
+    # The issuer created previously
+    name: letsencrypt-production
+  dnsNames:
+  - game.{{ domain_name }}

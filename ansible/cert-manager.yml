@@ -1,0 +1,24 @@
+---
+
+# creating game ns here since we're using namespaced issuer atm
+- name: "Create ns"
+  hosts: localhost
+  connection: local
+  vars:
+    namespace_name: "{{ game_namespace }}"
+  roles:
+    - namespaces
+
+- name: "Create ns"
+  hosts: localhost
+  connection: local
+  vars:
+    namespace_name: "{{ cert_manager_namespace }}"
+  roles:
+    - namespaces
+
+
+- name:  "Deploy cert manager"
+  hosts: localhost
+  roles:
+    - cert_manager

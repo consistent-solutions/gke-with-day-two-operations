@@ -1,0 +1,84 @@
+---
+
+- name: set project
+  shell: gcloud config set project "{{ project_name }}"
+
+- name: set region
+  shell: gcloud config set compute/region "{{ region }}"
+
+- name: enable dns apis
+  shell: gcloud services enable dns.googleapis.com --project "{{ project_name }}"
+
+- name: query for managed-zone
+  shell: gcloud dns managed-zones list | grep "{{ managed_zone_name }}" | wc -l
+  register: managed_zone_result
+  until: managed_zone_result is success
+  retries: 10
+  delay: 5
+
+- name: create managed-zone accordingly
+  shell: gcloud dns managed-zones create "{{ managed_zone_name }}" --dns-name "{{ domain_name }}." --description "Automatically managed zone by kubernetes.io/external-dns"
+  when: managed_zone_result.stdout|int == 0|int
+
+- name: query for sa
+  shell: gcloud iam service-accounts list | grep {{ external_dns_sa_account }} | wc -l
+  register: ext_dns_result
+  until: ext_dns_result is success
+  retries: 10
+  delay: 5
+
+
+#TODO: optimize later.
+
+#NOTE: this will create the domain, create the sa, and external-dns on cluster
+# https://itsmetommy.com/2019/06/14/kubernetes-automated-dns-with-externaldns-on-gke/
+
+- name: create sa
+  shell: gcloud iam service-accounts create {{ external_dns_sa_account }} --display-name="Service Account to support ACME DNS-01 challenge." --project={{ project_name }}
+  when: ext_dns_result.stdout|int == 0|int
+
+- name: query for external-dns secret
+  shell: kubectl get secrets --namespace={{ external_dns_namespace }} | grep "external-dns" | grep Opaque | wc -l
+  register: ext_dns_secret_result
+  until: ext_dns_secret_result is success
+  retries: 10
+  delay: 5
+
+- block:
+  - name: create credentials json for sa secret
+    shell: gcloud iam service-accounts keys create ./credentials.json --iam-account={{ external_dns_sa_account }}@{{ project_name }}.iam.gserviceaccount.com --project={{ project_name }}
+
+  - name: create sa binding
+    shell: gcloud projects add-iam-policy-binding {{ project_name }} --member=serviceAccount:{{ external_dns_sa_account }}@{{ project_name }}.iam.gserviceaccount.com --role=roles/dns.admin
+
+  - name: create secret to add to deployment
+    shell: kubectl create secret generic external-dns --from-file=./credentials.json --namespace={{ external_dns_namespace }}
+  when: ext_dns_secret_result.stdout|int == 0|int
+
+####
+
+- name: create resource yaml files
+  template:
+    src: "{{ item }}.yaml.j2"
+    dest: "/tmp/{{ item }}.yaml"
+  with_items:
+    - "external-dns-deploy"
+    - "external-dns-sa"
+    #- "game-ingress-updated"
+
+- name: apply files
+  shell: |
+    {{ kubectl_command }} \
+    apply -R  -f /tmp/{{ item }}.yaml
+  register: install_results
+  until: install_results is success
+  retries: 5
+  delay: 3
+  with_items:
+    - "external-dns-deploy"
+    - "external-dns-sa"
+
+- name: remove credentials.json
+  file:
+    path: credentials.json
+    state: absent

@@ -1,0 +1,249 @@
+---
+
+# TODO: IF NEEDED, wait for all lb's to be deleted!!!!
+
+
+######################################################
+#  Delete Cert-Manager Resources
+#
+
+# Setup/Ensure Ansible SA credentials file is available locally (cloud shell)
+# NOTE: duplicated from roles/velero/tasks/main.yml
+
+- name: ensure {{ gcp_credentials_dir }} exists
+  file:
+    path: "{{ gcp_credentials_dir }}"
+    state: directory
+
+# Check if ansible sa key credentials file exists already, if not (or if it is empty) then create a new key and credentials file
+- name: Check for {{ gcp_credentials_dir }}{{ gcp_credentials_file  }}
+  stat:
+    path: "{{ gcp_credentials_dir }}{{ gcp_credentials_file }}"
+  register: stat_ansible_credentials_file
+
+- name: create ansible sa key if {{ gcp_credentials_file }} does not exist OR it is empty
+  shell: gcloud iam service-accounts keys create {{ gcp_credentials_dir }}{{ gcp_credentials_file }} --iam-account ansible@{{ project_name }}.iam.gserviceaccount.com
+  when: stat_ansible_credentials_file.stat.exists == false or stat_ansible_credentials_file.stat.size == 0
+
+# If credentials file already exists but no keys exist on gcp side (for ansible sa)
+- name: check for ansible sa keys
+  shell:  gcloud iam service-accounts keys list --iam-account ansible@{{ project_name }}.iam.gserviceaccount.com | wc -l # if 2, then create, if > 2 key already created
+  register: ansible_sa_key_count
+
+- name: create ansible sa key
+  shell: gcloud iam service-accounts keys create {{ gcp_credentials_dir }}{{ gcp_credentials_file }} --iam-account ansible@{{ project_name }}.iam.gserviceaccount.com
+  when: ansible_sa_key_count.stdout|int == 2 # first line is column headers, second line is system created/managed key (system managed key gets pushed to bottom of list as more keys are created)
+
+- block:
+  # kubectl delete ing 2048-ingress -n dev-game
+  - name: delete 2048-ingress in dev-game ns
+    shell: kubectl delete ing {{ item }} -n dev-game
+    with_items:
+      - "2048-ingress-stage"
+      - "2048-ingress-prod"
+
+  # NOTE: DELETE THE issuer and the certificate in detaging-game ns!!
+  - name: delete issuers in dev-game ns
+    shell: kubectl delete issuer {{ item }} -n dev-game
+    with_items:
+      - "letsencrypt-staging"
+      - "letsencrypt-production"
+
+  - name: delete cert-manager certificates in dev-game ns
+    shell: kubectl delete certificate {{ item }} -n dev-game
+    with_items:
+      - "game-biz-staging"
+      - "game-biz-production"
+      - "game-biz-tls-staging"
+      - "game-biz-tls-production"
+
+  - name: delete cert-manager secrets in dev-game ns
+    shell: kubectl delete secret {{ item }} -n dev-game
+    with_items:
+      - "cert-manager-credentials"
+      - "letsencrypt-staging-account-key"
+      - "letsencrypt-production-account-key"
+      - "game-biz-tls-staging"
+      - "game-biz-tls-production"
+
+  # kubectl delete -f https://github.com/jetstack/cert-manager/releases/download/v0.14.2/cert-manager.crds.yaml
+  - name: delete certmanager (& crds)  
+    shell: kubectl delete -f https://github.com/jetstack/cert-manager/releases/download/v0.14.2/cert-manager.crds.yaml
+  ignore_errors: true
+
+- block:
+  # #delete the helm release for cert-manager
+  # /tmp/helm-v3.0.2/linux-amd64/helm list -n cert-manager
+  # /tmp/helm-v3.0.2/linux-amd64/helm delete cert-manager -n cert-manager
+  - name: delete the helm release for cert-manager
+    shell: /tmp/helm-v3.0.2/linux-amd64/helm delete cert-manager -n cert-manager
+
+  # NOTE: as long as helm deleted the proper cert-manager resources, most the next cmds will error in a good way
+  # NOTE: just make sure these crbs don't exist
+  # kubectl delete clusterrolebinding tiller tiller-cluster-admin
+  - name: delete clusterrolebinding (tiller, tiller-cluster-admin)
+    shell: kubectl delete clusterrolebinding tiller tiller-cluster-admin
+
+  # kubectl delete rolebinding cert-manager-cainjector:leaderelection -n kube-system
+  # kubectl delete rolebinding cert-manager:leaderelection -n kube-system
+  - name: delete cert-manager rolebindings
+    shell: kubectl delete rolebinding {{ item }} -n kube-system
+    with_items:
+      - "cert-manager-cainjector:leaderelection"
+      - "cert-manager:leaderelection" 
+
+  # kubectl delete role cert-manager-cainjector:leaderelection -n kube-system
+  # kubectl delete role cert-manager:leaderelection -n kube-system
+  - name: delete cert-manager roles in kube-system ns
+    shell: kubectl delete role {{ item }} -k kube-system
+    with_items:
+     - "cert-manager-cainjector:leaderelection"
+     - "cert-manager:leaderelection"
+
+  - name: get cert-manager sa account email suffix
+    shell: cat {{ cert_manager_sa_account }}
+    register: cert_manager_sa_email_suffix
+
+  - name: set cert-manager account email with suffix
+    set_fact:
+      CERT_MANAGER_SA_ACCOUNT: "{{ cert_manager_sa_account }}{{ cert_manager_sa_email_suffix.stdout }}"
+      cacheable: true
+       
+  - name: delete cert-manager service account
+    gcp_iam_service_account:
+      name: "{{ CERT_MANAGER_SA_ACCOUNT }}@{{ project_name }}.iam.gserviceaccount.com"
+      display_name: "{{ CERT_MANAGER_SA_ACCOUNT }}"
+      project: "{{ project_name }}"
+      auth_kind: serviceaccount
+      service_account_file: "{{ gcp_credentials_dir }}{{ gcp_credentials_file }}"
+      state: absent
+
+  - name: delete cert-manager suffix file
+    file:
+      path: "{{ cert_manager_sa_account }}"
+      state: absent
+
+  - name: delete cert-manager credentials file
+    file:
+      path: "{{ gcp_credentials_dir }}{{ cert_manager_sa_key_file_name }}"
+      state: absent
+
+  # kubectl delete clusterrole $(kubectl get clusterrole --all-namespaces | grep cert-manager | awk '{print $1}')
+  # kubectl delete clusterrolebinding $(kubectl get clusterrolebinding --all-namespaces | grep cert-manager | awk '{print $1}')
+  - name: delete cert-manager clusterroles or clusterrolebindings in all ns
+    shell: kubectl delete {{ item }}
+    with_items:
+      - "$(kubectl get clusterrole --all-namespaces | grep cert-manager | awk '{print $1}')"
+      - "$(kubectl get clusterrolebindings --all-namespaces | grep cert-manager | awk '{print $1}')"
+
+  # kubectl delete ns cert-manager
+  - name: delete cert-manager ns
+    shell: kubectl delete ns cert-manager
+
+  # kubectl delete MutatingWebhookConfiguration cert-manager-webhook
+  - name: delete MutatingWebhookConfiguration cert-manager-webhook
+    shell: kubectl delete MutatingWebhookConfiguration cert-manager-webhook
+
+  # kubectl delete ValidatingWebhookConfiguration cert-manager-webhook
+  - name: delete ValidatingWebhookConfiguration cert-manager-webhook
+    shell: kubectl delete ValidatingWebhookConfiguration cert-manager-webhook
+  
+  ignore_errors: true
+
+- name: game namespace exists
+  shell: kubectl get ns {{game_namespace}} | wc -l
+  register: game_ns_result
+
+- name: remove game ns
+  shell: kubectl delete ns {{game_namespace}}
+  when: game_ns_result.stdout|int != 0
+
+######################################################
+#  Delete Velero Resources
+#
+
+# Setup/Ensure Ansible SA credentials file is available locally (cloud shell)
+# NOTE: duplicated from roles/velero/tasks/main.yml
+
+- name: ensure {{ gcp_credentials_dir }} exists
+  file:
+    path: "{{ gcp_credentials_dir }}"
+    state: directory
+
+# Check if ansible sa key credentials file exists already, if not (or if it is empty) then create a new key and credentials file
+- name: Check for {{ gcp_credentials_dir }}{{ gcp_credentials_file  }}
+  stat:
+    path: "{{ gcp_credentials_dir }}{{ gcp_credentials_file }}"
+  register: stat_ansible_credentials_file
+
+- name: create ansible sa key if {{ gcp_credentials_file }} does not exist OR it is empty
+  shell: gcloud iam service-accounts keys create {{ gcp_credentials_dir }}{{ gcp_credentials_file }} --iam-account ansible@{{ project_name }}.iam.gserviceaccount.com
+  when: stat_ansible_credentials_file.stat.exists == false or stat_ansible_credentials_file.stat.size == 0
+
+# If credentials file already exists but no keys exist on gcp side (for ansible sa)
+- name: check for ansible sa keys
+  shell:  gcloud iam service-accounts keys list --iam-account ansible@{{ project_name }}.iam.gserviceaccount.com | wc -l # if 2, then create, if > 2 key already created
+  register: ansible_sa_key_count
+
+- name: create ansible sa key
+  shell: gcloud iam service-accounts keys create {{ gcp_credentials_dir }}{{ gcp_credentials_file }} --iam-account ansible@{{ project_name }}.iam.gserviceaccount.com
+  when: ansible_sa_key_count.stdout|int == 2 # first line is column headers, second line is system created/managed key (system managed key gets pushed to bottom of list as more keys are created)
+
+
+# Ignore Errors Block is for following cases:
+#       - velero namespace not found (already deleted)
+#       - velero sa (email) not found (already deleted)
+#       - velero role not found (already deleted)
+- block:
+
+  - name: remove velero from cluster (https://velero.io/docs/v1.3.2/uninstalling/)
+    shell: kubectl delete namespace/velero clusterrolebinding/velero && kubectl delete crds -l component=velero
+
+  - name: get and register service account email
+    shell: gcloud iam service-accounts list --filter="displayName={{ velero_sa_display_name  | quote }}" --format "value(email)"
+    register: velero_sa_email
+
+  - name: set velero service account email
+    set_fact:
+      VELERO_SA_EMAIL: "{{ velero_sa_email.stdout }}"
+
+  - name: check for velero policy (iam role binding) before delete
+    shell: gcloud projects get-iam-policy {{ project_name }} --flatten="bindings[].members" --format="table(bindings.role)" --filter="bindings.members:"{{ VELERO_SA_EMAIL }}
+    register: results
+
+  - name: delete velero iam policy binding
+    shell: gcloud projects remove-iam-policy-binding {{ project_name }} --member=serviceAccount:{{ VELERO_SA_EMAIL }} --role=projects/{{ project_name }}/roles/{{ velero_role }}
+
+  - name: delete velero role
+    gcp_iam_role:
+      name: "{{ velero_role }}"
+      title: "{{ velero_role_title }}"
+      description: Velero role for backups to bucket
+      project: "{{ project_name }}"
+      auth_kind: serviceaccount
+      service_account_file: "{{ gcp_credentials_dir }}{{ gcp_credentials_file }}"
+      state: absent
+
+  ignore_errors: true
+
+- name: delete velero service account
+  gcp_iam_service_account:
+    name: "{{ velero_sa }}@{{ project_name }}.iam.gserviceaccount.com"
+    display_name: "{{ velero_sa_display_name }}"
+    project: "{{ project_name }}"
+    auth_kind: serviceaccount
+    service_account_file: "{{ gcp_credentials_dir }}{{ gcp_credentials_file }}"
+    state: absent
+
+- name: delete bucket for velero backups
+  gcp_storage_bucket:
+    name: "{{ velero_bucket }}"
+    project: "{{ project_name }}"
+    auth_kind: serviceaccount
+    service_account_file: "{{ gcp_credentials_dir }}{{ gcp_credentials_file }}"
+    state: absent
+
+- name: delete velero credentials file
+  file:
+    path: "{{ gcp_credentials_dir }}{{ velero_credentials_file }}"
+    state: absent

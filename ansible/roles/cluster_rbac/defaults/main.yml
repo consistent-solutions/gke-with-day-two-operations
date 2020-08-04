@@ -1,0 +1,20 @@
+cluster_admin_emails:
+  - "cluster-admin@gmail.com"
+
+cluster_name: dev
+
+namespace_rbac:
+  - namespace: "{{ game_namespace }}"
+    ns_admin:
+      users:
+        - "game-admin@domain.com"
+      groups:
+        - a-tenant-group
+    ns_edit:
+      users:
+      groups:
+        - a-tenant-group
+    ns_viewer:
+      users:
+      groups:
+        - a-tenant-group

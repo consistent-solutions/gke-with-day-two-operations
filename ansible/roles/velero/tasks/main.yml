@@ -1,0 +1,150 @@
+---
+
+### setup for testing velero and confirming dynamic volumes
+- name: create mysql ns
+  shell: kubectl create ns {{ mysql_ns }}
+  ignore_errors: true
+
+- name: create resource yaml files for mysql
+  template:
+    src: "{{ item }}.yaml.j2"
+    dest: "/tmp/{{ item }}.yaml"
+  with_items:
+    - "test_mysql"
+
+- name: apply files
+  shell: |
+    {{ kubectl_command }} \
+    apply -R  -f /tmp/{{ item }}.yaml
+  register: install_results
+  until: install_results is success
+  retries: 5
+  delay: 3
+  with_items:
+    - "test_mysql"
+
+####################################################
+# NOTES: (1) manually created an OWNER service account for ansible for (auth_kind: serviceaccount, service_account_file) gcp ansible modules
+#        (2) the create iam-policy-binding step (velero bucket access) still uses shell
+#        (3) the  'give velero sa objectAdmin access to backup bucket' step still uses shell
+#        (4) TODO: add detailed instructions for velero backup and recovery
+#        (5) TODO: determine need to cover edge case where ansible sa credentials file exists (and not empty), yet it is outdated or key has been deleted on gcp side
+### Setup and Install Velero
+
+- name: ensure {{ gcp_credentials_dir }} exists
+  file:
+    path: "{{ gcp_credentials_dir }}"
+    state: directory
+
+# Check if ansible sa key credentials file exists already, if not (or if it is empty) then create a new key and credentials file
+- name: Check for {{ gcp_credentials_dir }}{{ gcp_credentials_file  }}
+  stat:
+    path: "{{ gcp_credentials_dir }}{{ gcp_credentials_file }}"
+  register: stat_ansible_credentials_file
+
+- name: create ansible sa key if {{ gcp_credentials_file }} does not exist OR it is empty
+  shell: gcloud iam service-accounts keys create {{ gcp_credentials_dir }}{{ gcp_credentials_file }} --iam-account ansible@{{ project_name }}.iam.gserviceaccount.com
+  when: stat_ansible_credentials_file.stat.exists == false or stat_ansible_credentials_file.stat.size == 0
+
+# If credentials file already exists but no keys exist on gcp side (for ansible sa)
+- name: check for ansible sa keys
+  shell:  gcloud iam service-accounts keys list --iam-account ansible@{{ project_name }}.iam.gserviceaccount.com | wc -l # if 2, then create, if > 2 key already created
+  register: ansible_sa_key_count
+
+- name: create ansible sa key
+  shell: gcloud iam service-accounts keys create {{ gcp_credentials_dir }}{{ gcp_credentials_file }} --iam-account ansible@{{ project_name }}.iam.gserviceaccount.com
+  when: ansible_sa_key_count.stdout|int == 2 # first line is column headers, second line is system created/managed key (system managed key gets pushed to bottom of list as more keys are created)
+
+- name: install velero
+  homebrew:
+   name: velero
+   state: present
+
+- name: create velero service account
+  gcp_iam_service_account:
+    name: "{{ velero_sa }}@{{ project_name }}.iam.gserviceaccount.com"
+    display_name: "{{ velero_sa_display_name }}"
+    project: "{{ project_name }}"
+    auth_kind: serviceaccount
+    service_account_file: "{{ gcp_credentials_dir }}{{ gcp_credentials_file }}"
+    state: present
+
+- name: create velero service account key
+  gcp_iam_service_account_key:
+    service_account: name={{ velero_sa }}@{{ project_name }}.iam.gserviceaccount.com
+    private_key_type: TYPE_GOOGLE_CREDENTIALS_FILE
+    path: "{{ gcp_credentials_dir }}{{ velero_credentials_file }}"
+    project: "{{ project_name }}"
+    auth_kind: serviceaccount
+    service_account_file: "{{ gcp_credentials_dir }}{{ gcp_credentials_file }}"
+    state: present
+
+- name: check for velero role in DELETED state
+  shell: gcloud iam roles list --show-deleted --filter="title={{ velero_role_title | quote }}" --project {{ project_name }}
+  register: velero_role_state
+
+- name: set role permissions list
+  set_fact:
+    ROLE_PERMISSIONS: [  "compute.disks.get", "compute.disks.create", "compute.disks.createSnapshot", "compute.snapshots.get", "compute.snapshots.create", "compute.snapshots.useReadOnly", "compute.snapshots.delete", "compute.zones.get" ]
+
+- block:
+  - name: undelete velero role (if applicable)
+    shell: gcloud iam roles undelete {{ velero_role }} --project {{ project_name }}
+    register: undelete_velero_role_result
+    when: "'deleted: true' in velero_role_state.stdout_lines"
+  ignore_errors: true
+
+- name: create velero role
+  gcp_iam_role:
+    name: "{{ velero_role }}"
+    title: "{{ velero_role_title }}"
+    description: Velero role for backups to bucket
+    included_permissions: "{{ ROLE_PERMISSIONS }}"
+    project: "{{ project_name }}"
+    auth_kind: serviceaccount
+    service_account_file: "{{ gcp_credentials_dir }}{{ gcp_credentials_file }}"
+    state: present
+  when: "'deleted: true' not in velero_role_state.stdout_lines"
+
+- name: create bucket for velero backups
+  gcp_storage_bucket:
+    name: "{{ velero_bucket }}"
+    project: "{{ project_name }}"
+    auth_kind: serviceaccount
+    service_account_file: "{{ gcp_credentials_dir }}{{ gcp_credentials_file }}"
+    state: present
+
+- name: get info on velero role
+  gcp_iam_role_info:
+    project: "{{ project_name }}"
+    auth_kind: serviceaccount
+    service_account_file: "{{ gcp_credentials_dir }}{{ gcp_credentials_file }}"
+  register: velero_role_info
+
+- name: get and register service account email
+  shell: gcloud iam service-accounts list --filter="displayName={{ velero_sa_display_name  | quote }}" --format "value(email)"
+  register: velero_sa_email
+
+- name: set velero service account email
+  set_fact:
+    VELERO_SA_EMAIL: "{{ velero_sa_email.stdout }}"
+    cacheable: true
+
+- name: create iam policy binding (velero sa and role)
+  shell: gcloud projects add-iam-policy-binding {{ project_name }} --member serviceAccount:{{ VELERO_SA_EMAIL }} --role projects/{{ project_name }}/roles/{{ velero_role }}
+
+- name: give velero sa objectAdmin access to backup bucket
+  shell: gsutil iam ch serviceAccount:{{ VELERO_SA_EMAIL }}:objectAdmin gs://{{ velero_bucket }}/
+
+- name: install velero to cluster
+  shell: velero install --provider gcp --plugins velero/velero-plugin-for-gcp:v1.0.1 --bucket {{ velero_bucket }}  --secret-file {{ gcp_credentials_dir }}{{ velero_credentials_file }}
+
+- name: check status of velero on cluster
+  shell: kubectl get po -n velero | cut -d $'\n' -f 2 | tr -s ' ' | cut -d ' ' -f 3
+  register: velero_status
+  until: "'Running' in velero_status.stdout"
+  retries: 4
+  delay: 13
+
+- debug:
+    msg: "{{ velero_status.stdout }}"

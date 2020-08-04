@@ -1,0 +1,181 @@
+---
+
+# Setup/Ensure Ansible SA credentials file is available locally (cloud shell)
+# NOTE: duplicated from roles/velero/tasks/main.yml
+
+- name: ensure {{ gcp_credentials_dir }} exists
+  file:
+    path: "{{ gcp_credentials_dir }}"
+    state: directory
+
+# Check if ansible sa key credentials file exists already, if not (or if it is empty) then create a new key and credentials file
+- name: Check for {{ gcp_credentials_dir }}{{ gcp_credentials_file  }}
+  stat:
+    path: "{{ gcp_credentials_dir }}{{ gcp_credentials_file }}"
+  register: stat_ansible_credentials_file
+
+- name: create ansible sa key if {{ gcp_credentials_file }} does not exist OR it is empty
+  shell: gcloud iam service-accounts keys create {{ gcp_credentials_dir }}{{ gcp_credentials_file }} --iam-account ansible@{{ project_name }}.iam.gserviceaccount.com
+  when: stat_ansible_credentials_file.stat.exists == false or stat_ansible_credentials_file.stat.size == 0
+
+# If credentials file already exists but no keys exist on gcp side (for ansible sa)
+- name: check for ansible sa keys
+  shell:  gcloud iam service-accounts keys list --iam-account ansible@{{ project_name }}.iam.gserviceaccount.com | wc -l # if 2, then create, if > 2 key already created
+  register: ansible_sa_key_count
+
+- name: create ansible sa key
+  shell: gcloud iam service-accounts keys create {{ gcp_credentials_dir }}{{ gcp_credentials_file }} --iam-account ansible@{{ project_name }}.iam.gserviceaccount.com
+  when: ansible_sa_key_count.stdout|int == 2 # first line is column headers, second line is system created/managed key (system managed key gets pushed to bottom of list as more keys are created)
+
+
+#NOTE: create secret, issuer, certificate, and updated ing in dev-game ns!
+  # INCLUDING rejection of http!!
+
+- name: query for sa
+  shell: gcloud iam service-accounts list | grep {{ cert_manager_sa_account }} | wc -l
+  register: cert_manager_sa_result
+  until: cert_manager_sa_result is success
+  retries: 10
+  delay: 5
+
+#- name: create sa
+#  shell: gcloud iam service-accounts create {{ cert_manager_sa_account }} --display-name={{ cert_manager_sa_account }} --project={{ project_name }}
+#  when: cert_manager_sa_result.stdout|int == 0|int
+#
+- name: check for cert-manager sa email suffix file
+  stat:
+    path: "{{ cert_manager_sa_account }}"
+  register: stat_cert_manager_sa_suffix_file
+
+- debug:
+    msg: "{{ stat_cert_manager_sa_suffix_file }}"
+
+- block:
+
+  - name: cert-manager sa email suffix (Google Cloud does not like reuse of sa emails)
+    shell: date +%s
+    register: cert_manager_sa_suffix
+
+  - debug:
+      msg: "{{ cert_manager_sa_suffix }}"
+
+  - name: set cert-manager service account email (with suffix)
+    set_fact:
+      CERT_MANAGER_SA_ACCOUNT: "{{ cert_manager_sa_account }}{{ cert_manager_sa_suffix.stdout }}"
+      cacheable: true
+
+  - name: create cert-manager service account
+    gcp_iam_service_account:
+      name: "{{ CERT_MANAGER_SA_ACCOUNT }}@{{ project_name }}.iam.gserviceaccount.com"
+      display_name: "{{ CERT_MANAGER_SA_ACCOUNT }}"
+      project: "{{ project_name }}"
+      auth_kind: serviceaccount
+      service_account_file: "{{ gcp_credentials_dir }}{{ gcp_credentials_file }}"
+      state: present
+
+  when: stat_cert_manager_sa_suffix_file.stat.exists == false or stat_cert_manager_sa_suffix_file.stat.size == 0
+  #when: cert_manager_sa_result.stdout|int == 0|int
+
+
+- name: query for game secret for cert-manager
+  shell: kubectl get secrets --namespace={{ game_namespace }} | grep "{{ cert_manager_sa_secret_name }}" | grep Opaque | wc -l
+  register: game_secret_result
+  until: game_secret_result is success
+  retries: 10
+  delay: 5
+
+- block:
+  #- name: create credentials json for sa secret
+  #  shell: gcloud iam service-accounts keys create ./{{ cert_manager_sa_key_file_name }} --iam-account={{ cert_manager_sa_account }}@{{ project_name }}.iam.gserviceaccount.com --project={{ project_name }}
+
+  - name: create cert-manager service account key file
+    gcp_iam_service_account_key:
+      service_account: name={{ CERT_MANAGER_SA_ACCOUNT }}@{{ project_name }}.iam.gserviceaccount.com
+      private_key_type: TYPE_GOOGLE_CREDENTIALS_FILE
+      path: "{{ gcp_credentials_dir }}{{ cert_manager_sa_key_file_name }}"
+      project: "{{ project_name }}"
+      auth_kind: serviceaccount
+      service_account_file: "{{ gcp_credentials_dir }}{{ gcp_credentials_file }}"
+      state: present
+
+  - name: create sa binding
+    shell: gcloud projects add-iam-policy-binding {{ project_name }} --member=serviceAccount:{{ CERT_MANAGER_SA_ACCOUNT }}@{{ project_name }}.iam.gserviceaccount.com --role=roles/dns.admin
+
+  - name: get path for sa credentials file
+    shell: echo {{ gcp_credentials_dir }}
+    register: sa_credentials_dir
+
+  - debug:
+      msg: "{{ sa_credentials_dir }}"
+
+  - name: create secret for game conditionally
+    shell: kubectl create secret generic {{ cert_manager_sa_secret_name }} -n {{ game_namespace }} --from-file={{ sa_credentials_dir.stdout }}{{ cert_manager_sa_key_file_name }}
+  when: game_secret_result.stdout|int == 0|int
+
+
+- name: list helm installations
+  shell: "{{ helm_command }} list --all-namespaces"
+  register: helm_list_results
+
+#NOTE: add crd, add helm repo, label ns, helm install
+#NOTE: this assumes a particular version
+- block:
+  - shell: kubectl label namespace {{ cert_manager_namespace }} certmanager.k8s.io/disable-validation="true"
+    ignore_errors: true
+
+  - name: add crds for cert-manager
+    shell: kubectl apply -f https://github.com/jetstack/cert-manager/releases/download/v0.14.2/cert-manager.crds.yaml
+
+  - name: add jetstack cert-manager repo
+    shell: "{{ helm_command }} repo add jetstack https://charts.jetstack.io"
+
+  #MAKE SURE IDEMPOTENT
+  - name: deploy certmanager
+    shell: "{{ helm_command }} install {{ cert_manager_release_name }} --namespace {{ cert_manager_namespace }} --version v0.14.2 jetstack/cert-manager"
+  when: cert_manager_release_name not in helm_list_results.stdout
+
+- name: wait for webhook to be running - this can take a few min
+  shell: kubectl get po -n {{ cert_manager_namespace }} | grep webhook | grep Running | wc -l
+  register: webhook_running_result
+  until: webhook_running_result.stdout|int > 0
+  retries: 60
+  delay: 5
+
+- name: save cert-manager sa account email(with suffix) for teardown
+  shell: echo {{ cert_manager_sa_suffix.stdout }} > {{ cert_manager_sa_account }}  
+  when: stat_cert_manager_sa_suffix_file.stat.exists == false or stat_cert_manager_sa_suffix_file.stat.size == 0
+
+#NOTE: manual cmds for only deleting ing/cert-manager k8s resources for testing
+# kubectl delete ing 2048-ingress -n dev-game
+
+
+# NOTE: DELETE THE issuer and the certificate in dev-game ns!!
+
+
+# kubectl delete -f https://github.com/jetstack/cert-manager/releases/download/v0.14.2/cert-manager.crds.yaml
+#
+
+# #delete the helm release for cert-manager
+# /tmp/helm-v3.0.2/linux-amd64/helm list -n cert-manager
+# /tmp/helm-v3.0.2/linux-amd64/helm delete cert-manager -n cert-manager
+#
+# NOTE: as long as helm deleted the proper cert-manager resources, most the next cmds will error in a good way
+
+# NOTE: just make sure these crbs don't exist
+# kubectl delete clusterrolebinding tiller tiller-cluster-admin
+#
+# kubectl delete rolebinding cert-manager-cainjector:leaderelection -n kube-system
+# kubectl delete rolebinding cert-manager:leaderelection -n kube-system
+#
+# kubectl delete role cert-manager-cainjector:leaderelection -n kube-system
+# kubectl delete role cert-manager:leaderelection -n kube-system
+#
+# kubectl delete clusterrole $(kubectl get clusterrole --all-namespaces | grep cert-manager | awk '{print $1}')
+# kubectl delete clusterrolebinding $(kubectl get clusterrolebinding --all-namespaces | grep cert-manager | awk '{print $1}')
+#
+# kubectl delete ns cert-manager
+# kubectl delete MutatingWebhookConfiguration cert-manager-webhook
+# kubectl delete ValidatingWebhookConfiguration cert-manager-webhook
+
+
+#TODO: use legit ca (and consider using cluster-issuer)

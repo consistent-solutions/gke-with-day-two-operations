@@ -1,0 +1,14 @@
+---
+
+
+# ensure: Kubernetes Engine Monitoring is enabled on cluster creation...with possibly gke metric System and workload logging and monitoring
+# NOTE: https://cloud.google.com/monitoring/kubernetes-engine/installing
+# https://cloud.google.com/monitoring/kubernetes-engine#about-skm
+
+#NOTE: using gke logging isn't as appealing as elasticsearch, but has equivalent info queryable
+- name: enable logging api endpoint with logging enabled on cluster
+  shell: gcloud services enable dns.googleapis.com --project "{{ project_name }}"
+
+
+# Info on metrics:
+# https://cloud.google.com/monitoring/kubernetes-engine/observing

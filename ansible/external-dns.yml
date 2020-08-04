@@ -1,0 +1,15 @@
+---
+
+- name: "Create ns"
+  hosts: localhost
+  connection: local
+  vars:
+    namespace_name: "{{ external_dns_namespace }}"
+  roles:
+    - namespaces
+
+
+- name:  "Deploy 2048 game"
+  hosts: localhost
+  roles:
+    - external_dns

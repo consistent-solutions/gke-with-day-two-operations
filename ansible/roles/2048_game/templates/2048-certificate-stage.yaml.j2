@@ -1,0 +1,12 @@
+apiVersion: cert-manager.io/v1alpha2
+kind: Certificate
+metadata:
+  name: game-biz-staging
+  namespace: "{{ game_namespace }}"
+spec:
+  secretName: {{ game_cert_secret_name }}-staging
+  issuerRef:
+    # The issuer created previously
+    name: letsencrypt-staging
+  dnsNames:
+  - game.{{ domain_name }}

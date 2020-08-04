@@ -1,0 +1,6 @@
+---
+
+- name:  "velero role"
+  hosts: localhost
+  roles:
+    - velero

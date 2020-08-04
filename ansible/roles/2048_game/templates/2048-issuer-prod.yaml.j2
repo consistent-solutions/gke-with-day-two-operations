@@ -1,0 +1,18 @@
+apiVersion: cert-manager.io/v1alpha2
+kind: Issuer
+metadata:
+  namespace: "{{ game_namespace }}"
+  name: letsencrypt-production
+spec:
+  acme:
+    email: {{ dns_owner_email }}
+    server: https://acme-v02.api.letsencrypt.org/directory
+    privateKeySecretRef:
+      name: letsencrypt-production-account-key
+    solvers:
+    - dns01:
+        clouddns:
+          project: {{ project_name }}
+          serviceAccountSecretRef:
+            name: {{ cert_manager_sa_secret_name }}
+            key: {{ cert_manager_sa_key_file_name }}

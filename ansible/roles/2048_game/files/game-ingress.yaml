@@ -1,0 +1,16 @@
+---
+apiVersion: networking.k8s.io/v1beta1
+kind: Ingress
+metadata:
+  name: "2048-ingress"
+  namespace: "game"
+  labels:
+    app: 2048-ingress
+spec:
+  rules:
+    - http:
+        paths:
+          - path: /*
+            backend:
+              serviceName: "service-2048"
+              servicePort: 80

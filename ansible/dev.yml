@@ -1,0 +1,8 @@
+---
+- import_playbook: cert-manager.yml
+- import_playbook: 2048-game.yml
+- import_playbook: cluster_rbac.yml
+- import_playbook: external-dns.yml
+- import_playbook: velero.yml
+#- import_playbook: logging_and_metrics.yml
+#- import_playbook: delete_k8s_cluster_app_resources.yml

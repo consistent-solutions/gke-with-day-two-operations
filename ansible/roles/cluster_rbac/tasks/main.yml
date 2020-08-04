@@ -1,0 +1,19 @@
+- name: Create authz dir
+  file: path="/tmp/authz/" state=directory
+
+- name: create rolebindings file
+  template: src="role_bindings.yaml.j2" dest="/tmp/authz/{{ item.namespace }}_rolebindings.yaml"
+  with_items: "{{ namespace_rbac }}"
+
+- name: apply rolebindings
+  shell: |
+     kubectl apply -f \
+     "/tmp/authz/{{item.namespace}}_rolebindings.yaml" \
+     --namespace {{ item.namespace }} \
+  with_items: "{{ namespace_rbac }}"
+
+- name: create cluster admin crb file
+  template: src="cluster_admin_crb.yaml.j2" dest="/tmp/authz/cluster_admin_crb.yaml"
+
+- name: apply cluster-admin crb
+  shell: "kubectl apply -f /tmp/authz/cluster_admin_crb.yaml"

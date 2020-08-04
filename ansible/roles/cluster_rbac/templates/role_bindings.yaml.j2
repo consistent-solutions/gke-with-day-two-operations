@@ -1,0 +1,82 @@
+---
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1beta1
+metadata:
+  name: ns-admin
+  namespace: {{ item.namespace }}
+subjects:
+{% if item.ns_admin.users%}
+{% for user in item.ns_admin.users %}
+- kind: User
+  name: {{ user }}
+{% endfor %}
+{% endif %}
+
+{% if item.ns_admin.groups%}
+{% for group in item.ns_admin.groups %}
+- kind: Group
+  name: {{ group }}
+  apiGroup: rbac.authorization.k8s.io
+{% endfor %}
+{% endif %}
+
+roleRef:
+  kind: ClusterRole
+  name: admin
+  apiGroup: ""
+
+---
+
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1beta1
+metadata:
+  name: ns-edit
+  namespace: {{ item.namespace }}
+subjects:
+{% if item.ns_edit.users%}
+{% for user in item.ns_edit.users %}
+- kind: User
+  name: {{ user }}
+{% endfor %}
+{% endif %}
+
+{% if item.ns_edit.groups %}
+{% for group in item.ns_edit.groups %}
+- kind: Group
+  name: {{ group }}
+  apiGroup: rbac.authorization.k8s.io
+{% endfor %}
+{% endif %}
+
+roleRef:
+  kind: ClusterRole
+  name: edit
+  apiGroup: ""
+
+---
+
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1beta1
+metadata:
+  name: ns-view
+  namespace: {{ item.namespace }}
+subjects:
+{% if item.ns_viewer.users%}
+{% for user in item.ns_viewer.users %}
+- kind: User
+  name: {{ user }}
+{% endfor %}
+{% endif %}
+
+{% if item.ns_viewer.groups%}
+{% for group in item.ns_viewer.groups %}
+- kind: Group
+  name: {{ group }}
+  apiGroup: rbac.authorization.k8s.io
+{% endfor %}
+{% endif %}
+
+roleRef:
+  kind: ClusterRole
+  name: view
+  apiGroup: ""

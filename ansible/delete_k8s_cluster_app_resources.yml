@@ -1,0 +1,7 @@
+---
+
+- name: "delete k8s cluster app resources"
+  hosts: localhost
+  connection: local
+  roles:
+    - delete_k8s_cluster_app_resources

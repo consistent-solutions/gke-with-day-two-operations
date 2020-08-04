@@ -1,0 +1,7 @@
+---
+
+
+- name:  "Deploy 2048 game"
+  hosts: localhost
+  roles:
+    - 2048_game
