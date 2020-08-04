@@ -35,7 +35,7 @@ https://github.com/vmware-tanzu/velero
 --------------------------
 
 ### 1) Provision GKE Public Cluster
-- complete all steps prior to https://github.com/consistent-solutions/terra-gke-jumpstart#configure-k8s-rbac-and-provision-workloads-with-ansible within parent repo (https://github.com/consistent-solutions/terra-gke-jumpstart).
+- complete all steps prior to https://github.com/consistent-solutions/terra-gke-jumpstart#configure-k8s-rbac-and-provision-workloads-with-ansible.
 #### NOTE: for simplicity use Google Cloud Shell for following steps.
 ### 2) Install Ansible
 
