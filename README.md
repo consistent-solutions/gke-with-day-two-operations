@@ -19,7 +19,7 @@ https://cloud.google.com/kubernetes-engine/docs/tutorials/http-balancer
 ### __ExternalDNS__
 ##### "keep zones synchronized with Ingresses and Services (of type=LoadBalancer) in various cloud providers."   
 https://github.com/kubernetes-sigs/external-dns#the-latest-release-v07   
-### __Cert-Manager __
+### __Cert-Manager__
 ##### "x509 certificate management for Kubernetes" for Ingress resources via Let's Encrypt (with DNS01 Challenge).   
 https://github.com/jetstack/cert-manager      
 ### __Velero__
